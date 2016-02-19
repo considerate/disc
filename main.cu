@@ -54,7 +54,6 @@ int main(void)
     uint32_t *indices = (uint32_t *) malloc(indexSize);
     uint64_t *mortons = (uint64_t *) malloc(resultSize);
     if (values == NULL || mortons == NULL) {
-        fprintf(stderr, "Failed to allocate host vectors!\n");
         exit(EXIT_FAILURE);
     }
 
