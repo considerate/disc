@@ -44,14 +44,24 @@ inline float scaleValue(float x, float len, float maxlen) {
     return fmin(fmax(0.0, 0.75*(x + 0.5*len)/maxlen), 0.75);
 }
 
+
 __global__
-void computeMortons(const float3 *values, uint64_t *mortons, int numData, int numQueries, float xlen, float ylen, float zlen, float maxlen) {
+void scalePoints(const float3 *values, uint32_t *intValues, int numElements, float xlen, float ylen, float zlen, float maxlen) {
+        int i = blockIdx.x * blockDim.x + threadIdx.x;
+        if (i < numElements) {
+            intValues[i*3+0] = toInt(scaleValue(values[i].x, xlen, maxlen));
+            intValues[i*3+1] = toInt(scaleValue(values[i].y, ylen, maxlen));
+            intValues[i*3+2] = toInt(scaleValue(values[i].z, zlen, maxlen));
+        }
+}
+__global__
+void computeMortons(const uint32_t *values, uint64_t *mortons, int numData, int numQueries) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < (numData + numQueries)) {
         uint64_t morton = mortonEncode(
-                        toInt(scaleValue(values[i].x, xlen, maxlen)),
-                        toInt(scaleValue(values[i].y, ylen, maxlen)),
-                        toInt(scaleValue(values[i].z, zlen, maxlen))
+            values[i*3+0],
+            values[i*3+1],
+            values[i*3+2]
         );
         morton = morton << 1; //Shift all bits up to leave LSD available
         if(i < numData) {
