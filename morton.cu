@@ -40,18 +40,20 @@ inline unsigned int toInt(float x) {
 }
 
 __device__ __host__ 
-inline float scaleValue(float x, float len, float maxlen) {
-    return fmin(fmax(0.0, 0.75*(x + 0.5*len)/maxlen), 0.75);
+inline float scaleValue(float x, float minx, float maxlen) {
+    float value = fmin(0.7,fmax(0.0, 0.7*(x-minx)/maxlen));
+    return value;
 }
 
 
 __global__
-void scalePoints(const float3 *values, uint4 *intValues, int numElements, float xlen, float ylen, float zlen, float maxlen) {
+void scalePoints(const float3 *values, uint4 *intValues, int numElements, uint32_t intShift,
+      float minx, float miny, float minz, float maxlen) {
         int i = blockIdx.x * blockDim.x + threadIdx.x;
         if (i < numElements) {
-            intValues[i].x = toInt(scaleValue(values[i].x, xlen, maxlen));
-            intValues[i].y = toInt(scaleValue(values[i].y, ylen, maxlen));
-            intValues[i].z = toInt(scaleValue(values[i].z, zlen, maxlen));
+            intValues[i].x = toInt(scaleValue(values[i].x, minx, maxlen))+intShift;
+            intValues[i].y = toInt(scaleValue(values[i].y, miny, maxlen))+intShift;
+            intValues[i].z = toInt(scaleValue(values[i].z, minz, maxlen))+intShift;
             intValues[i].w = i;
         }
 }
