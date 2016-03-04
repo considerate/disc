@@ -135,7 +135,7 @@ void bitonicSort(uint64_t *values, uint32_t length,  uint32_t i)
         //Bitonic merge
         uint32_t ddd = dir ^ ((i & (size / 2)) != 0);
 
-        for (uint32_t stride = (length >> 1); stride > 0; stride >>= 1)
+        for (uint32_t stride = size / 2; stride > 0; stride >>= 1)
         {
             __syncthreads();
             uint32_t pos = 2 * i - (i & (stride - 1));
@@ -147,7 +147,7 @@ void bitonicSort(uint64_t *values, uint32_t length,  uint32_t i)
         }
     }
 
-    for (uint32_t stride = (length >> 1); stride > 0; stride >>= 1) {
+    for (uint32_t stride = length / 2; stride > 0; stride >>= 1) {
         __syncthreads();
         uint32_t pos = 2 * i - (i & (stride - 1));
         Comparator(
@@ -159,6 +159,40 @@ void bitonicSort(uint64_t *values, uint32_t length,  uint32_t i)
 }
 
 
+__device__ inline void swap(uint64_t & a, uint64_t & b)
+{
+    register uint64_t tmp = a;
+    a = b;
+    b = tmp;
+}
+
+
+__device__
+void bitonicSort2(uint64_t *values, uint32_t size, uint32_t tid) {
+
+    // Parallel bitonic sort.
+    for (int k = 2; k <= size; k *= 2) {
+        // Bitonic merge:
+        for (int j = k / 2; j > 0; j /= 2) {
+            int ixj = tid ^ j;
+
+            if (ixj > tid) {
+                if ((tid & k) == 0) {
+                    if (values[tid] > values[ixj]) {
+                        swap(values[tid], values[ixj]);
+                    }
+                }
+                else {
+                    if (values[tid] < values[ixj]) {
+                        swap(values[tid], values[ixj]);
+                    }
+                }
+            }
+
+            __syncthreads();
+        }
+    }
+}
 __global__
 void approxNearest(uint64_t *queryIndices, uint4 *values, uint4 *data, uint64_t *currentNearest, uint32_t k, int numQueries, int numData) {
     extern __shared__ uint64_t candidates[];
@@ -177,16 +211,12 @@ void approxNearest(uint64_t *queryIndices, uint4 *values, uint4 *data, uint64_t 
             uint4 right = data[rightidx];
             uint64_t leftdist = distanceSq(querypoint, left);          
             uint64_t rightdist = distanceSq(querypoint, right);          
-            printf("DIST: %u => %lu, %lu\n", q, leftdist, rightdist);
+            //printf("DIST: %u => %lu, %lu\n", q, leftdist, rightdist);
 
             candidates[2*i] = (leftdist << 32) | left.w;
             candidates[2*i+1] = (rightdist << 32) | right.w;
             __syncthreads();
-            bitonicSort(candidates, 2*k, 2*i);
-            __syncthreads();
-            bitonicSort(candidates, 2*k, 2*i+1);
-            __syncthreads();
-            printf("DIST: (%u,%u) => %u\n", q, i, candidates[i] >> 32);
+            bitonicSort(candidates, 2*k, i);
         }
         //Write to global memory
         if(i < k) {
@@ -265,7 +295,8 @@ void mergeNearest(uint64_t *nearest, uint4 *values, uint4 *data, uint64_t *query
     extern __shared__ uint64_t shared[];
     uint64_t *currentNN = (uint64_t *) shared;
     uint32_t *counter = (uint32_t *) &currentNN[k];
-    uint64_t *candidates = (uint64_t *) &counter[2*k];
+    uint32_t *counter_scan = (uint32_t *) &counter[2*k];
+    uint64_t *candidates = (uint64_t *) &counter_scan[2*k];
     uint64_t *updatedNN = (uint64_t *) &candidates[2*k];
     uint32_t i = (uint32_t) threadIdx.x;
     uint32_t q = (uint32_t) blockIdx.x;
@@ -274,12 +305,12 @@ void mergeNearest(uint64_t *nearest, uint4 *values, uint4 *data, uint64_t *query
         currentNN[i] = nearest[q*k+i];
     }
 
-    if(i < 2*k) {
+    if(i < 2*k && q < numQueries) {
         counter[i] = i & 1; //1 if odd
     }
     __syncthreads();
 
-    uint32_t offset;
+    uint32_t offset = 0;
     uint64_t candidate;
     uint32_t loc;
     bool active = true;
@@ -301,54 +332,51 @@ void mergeNearest(uint64_t *nearest, uint4 *values, uint4 *data, uint64_t *query
             uint64_t dist = distanceSq(querypoint, datapoint);          
             candidate = (dist << 32) | datapoint.w;
             loc = binarySearch(currentNN, candidate, k);
-            //printf("(%u,%u,%u): %lu = %u\n", q, i, datapoint.w, dist,loc);
 
             if(loc == k) {
                 active = false;
             } else {
-                if(loc == 0) {
-                    offset = atomicAdd(&counter[0], 1);
+                uint32_t index = (loc != 0) ? (loc-1) : 0;
+                uint64_t current = currentNN[index];
+                if(current == candidate) {
+                    active = false;
                 } else {
-                    uint64_t current = currentNN[loc-1];
-                    if(current != candidate) {
-                        offset = atomicAdd(&counter[loc*2], 1);
-                    } else {
-                        active = false;
-                    }
+                    offset = atomicAdd(&counter[loc*2], (uint32_t) 1);
                 }
             }
-            //printf("(%u,%u): %u \n", q, i, offset);
         }
     }
-    __syncthreads();
 
     // Do a block-wise parallel exclusive prefix sum over counter
-    thrust::exclusive_scan(thrust::device, counter, counter + (2*k), counter);
-
+    __syncthreads();
+    thrust::exclusive_scan(thrust::device, counter, counter + (2*k), counter_scan);
     __syncthreads();
 
     // for all current nearest
-    if(i < k) {
-        uint32_t index = counter[2*i + 1];
-        if(index < k) {
-            updatedNN[index] = currentNN[i];
+    if(q < numQueries) {
+        if(i < k) {
+            uint32_t index = counter_scan[2*i + 1];
+            // printf("(%u,%u): (%u, %u) \n", q, i, counter_scan[2*i], index);
+            if(index < k) {
+                updatedNN[index] = currentNN[i];
+            }
         }
-    }
-    __syncthreads();
+        __syncthreads();
 
-    // for all new candidate nearest
-    if(i < 2*k && active == true) {
-        uint32_t index = counter[2*loc] + offset;
-        if(index < k) {
-            updatedNN[index] = candidate;
+        // for all new candidate nearest
+        if(i < 2*k && active == true) {
+            uint32_t index = counter_scan[2*loc] + offset;
+            if(index < k) {
+                updatedNN[index] = candidate;
+            }
         }
-    }
-    __syncthreads();
+        __syncthreads();
 
-    if(i < k && q < numQueries) {
-        nearest[q*k+i] = updatedNN[i];
+        if(i < k && q < numQueries) {
+            nearest[q*k+i] = updatedNN[i];
+        }
+        __syncthreads();
     }
-    __syncthreads();
 }
 
 
@@ -357,25 +385,25 @@ void sortMerged(uint64_t *nearest, uint32_t k, uint32_t numQueries) {
     extern __shared__ uint64_t toSort[];
     uint32_t i = (uint32_t) threadIdx.x;
     uint32_t q = (uint32_t) blockIdx.x;
-    uint32_t block = (uint32_t) blockIdx.x * blockDim.x;
     if(i < k && q < numQueries) {
-        toSort[i] = nearest[block+i];
+        toSort[i] = nearest[q*k+i];
         __syncthreads();
-        bitonicSort(toSort, k, i);
+        bitonicSort2(toSort, k, i);
         __syncthreads();
-        nearest[block+i] = toSort[i];
+        nearest[q*k+i] = toSort[i];
     }
 }
 
 void mergeStep(uint64_t *nearest, uint4 *values, uint4 *data, uint64_t *queryIndices, const uint32_t k, int numQueries, int numData) {
     int threadsPerBlock = 2*k;
     int blocksPerGrid = numQueries;
-    size_t sharedMemorySize = k*sizeof(uint64_t)+ 2*k*sizeof(uint32_t) + 2*k*sizeof(uint64_t) + k*sizeof(uint64_t);
+    size_t sharedMemorySize = k*sizeof(uint64_t) + 2*k*sizeof(uint32_t) + 2*k*sizeof(uint32_t)+ 2*k*sizeof(uint64_t) + k*sizeof(uint64_t);
     mergeNearest<<< blocksPerGrid, threadsPerBlock, sharedMemorySize >>>(nearest, values, data, queryIndices, k, numQueries, numData);
 
     cudaError_t err = cudaSuccess;
     err = cudaGetLastError();
     handleError(err, __LINE__);
+
     // nearest now unsorted - sort each block (data points for a query) by distance from q
     sortMerged<<< blocksPerGrid, k, k*sizeof(uint64_t) >>>(nearest, k, numQueries);
     err = cudaGetLastError();
@@ -424,9 +452,9 @@ void initValues(float3 *values, float &minx, float &miny, float &minz, float &ma
 
 int main(void)
 {
-    int numData = 1 << 5;
-    int numQueries = 4;
-    uint32_t k = 10;
+    int numData = 1 << 20;
+    int numQueries = 1 << 10;
+    uint32_t k = 1 << 5;
     int numElements = numData + numQueries;
 
     assert(2*k <= numData);
@@ -485,7 +513,6 @@ int main(void)
 
     float minx, miny, minz, maxlen;
     initValues(values, minx, miny, minz, maxlen, numElements);
-    printf("lens: (%f,%f,%f,%f)\n", minx, miny, minz, maxlen);
 
     err = cudaMemcpy(devValues, values, valueSize, cudaMemcpyHostToDevice);
     handleError(err, __LINE__);
@@ -509,34 +536,23 @@ int main(void)
         thrust::sort_by_key(thrust::device, devMortons, devMortons + numElements, devIntValues);
 
         createPrefixList(devIntValues, devPrefixQueryIndex, numData, numElements);
-        err = cudaMemcpy(intValues, devIntValues, intSize, cudaMemcpyDeviceToHost);
-        handleError(err, __LINE__);
         pointCompaction(devIntValues, devMortons, devPrefixQueryIndex, devData, devQueryIndices, numData, numElements);
-        err = cudaMemcpy(queryIndices, devQueryIndices, qiSize, cudaMemcpyDeviceToHost);
-        handleError(err, __LINE__);
+        // err = cudaMemcpy(queryIndices, devQueryIndices, qiSize, cudaMemcpyDeviceToHost);
+        // handleError(err, __LINE__);
 
-        for(int a = 0; a < numElements; ++a) {
-          uint4 point = intValues[a];
-          if(point.w < numData) {
-            printf("D(%u,%u,%u,%u)\n", point.x, point.y, point.z, point.w);
-          } else {
-            printf("Q(%u,%u,%u,%u)\n", point.x, point.y, point.z, point.w);
-          }
-        }
+        // for(int a = 0; a < numElements; ++a) {
+        //   uint4 point = intValues[a];
+        //   if(point.w < numData) {
+        //     printf("D(%u,%u,%u,%u)\n", point.x, point.y, point.z, point.w);
+        //   } else {
+        //     printf("Q(%u,%u,%u,%u)\n", point.x, point.y, point.z, point.w);
+        //   }
+        // }
 
         if(j == 0) {
             findCandidates(devQueryIndices, devIntValues, devData, devNearest, k, numQueries, numData);
         } else {
             mergeStep(devNearest, devIntValues, devData, devQueryIndices, k, numQueries, numData);
-        }
-        err = cudaMemcpy(nearest, devNearest, nearestSize, cudaMemcpyDeviceToHost);
-        handleError(err, __LINE__);
-        for(int a = 0; a < numQueries; ++a) {
-            printf("[");
-            for(int b = 0; b < k; ++b) {
-                printf("(%u,%u),", (uint32_t) (nearest[a*k + b] >> 32), (uint32_t) (nearest[a*k + b]) );
-            }
-            printf("]\n");
         }
     }
 
@@ -545,19 +561,50 @@ int main(void)
 
     err = cudaMemcpy(nearest, devNearest, nearestSize, cudaMemcpyDeviceToHost);
     handleError(err, __LINE__);
+    for(int a = 0; a < numQueries; ++a) {
+        if(a >= 0.99*numQueries) {
+            printf("%d: [", a);
+            for(int b = 0; b < k; ++b) {
+                printf("(%u,%u),", (uint32_t) (nearest[a*k + b] >> 32), (uint32_t) (nearest[a*k + b]) );
+            }
+            printf("]\n\n");
+        }
+    }
+    err = cudaMemcpy(intValues, devIntValues, intSize, cudaMemcpyDeviceToHost);
+    handleError(err, __LINE__);
     err = cudaMemcpy(data, devData, dataSize, cudaMemcpyDeviceToHost);
     handleError(err, __LINE__);
 
     printf("Time elapsed: %ld.%06ld\n", (long int)tval_result.tv_sec, (long int)tval_result.tv_usec);
 
+    // Free device memory
     err = cudaFree(devValues);
+    handleError(err, __LINE__);
+
+    err = cudaFree(devIntValues);
     handleError(err, __LINE__);
 
     err = cudaFree(devMortons);
     handleError(err, __LINE__);
 
+    err = cudaFree(devPrefixQueryIndex);
+    handleError(err, __LINE__);
+
+    err = cudaFree(devQueryIndices);
+    handleError(err, __LINE__);
+
+    err = cudaFree(devData);
+    handleError(err, __LINE__);
+
+    err = cudaFree(devNearest);
+    handleError(err, __LINE__);
+
     // Free host memory
     free(values);
+    free(intValues);
+    free(data);
+    free(queryIndices);
+    free(nearest);
     free(mortons);
 
     err = cudaDeviceReset();
