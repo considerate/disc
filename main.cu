@@ -23,7 +23,7 @@ using namespace std;
 
 void handleError(cudaError_t err, int line) {
     if (err != cudaSuccess) {
-        printf("Cuda Error %d", line);
+        fprintf(stderr, "Cuda Error %d", line);
         exit(EXIT_FAILURE);
     }
 }
@@ -211,7 +211,6 @@ void approxNearest(uint64_t *queryIndices, uint4 *values, uint4 *data, uint64_t 
             uint4 right = data[rightidx];
             uint64_t leftdist = distanceSq(querypoint, left);          
             uint64_t rightdist = distanceSq(querypoint, right);          
-            //printf("DIST: %u => %lu, %lu\n", q, leftdist, rightdist);
 
             candidates[2*i] = (leftdist << 32) | left.w;
             candidates[2*i+1] = (rightdist << 32) | right.w;
@@ -356,7 +355,6 @@ void mergeNearest(uint64_t *nearest, uint4 *values, uint4 *data, uint64_t *query
     if(q < numQueries) {
         if(i < k) {
             uint32_t index = counter_scan[2*i + 1];
-            // printf("(%u,%u): (%u, %u) \n", q, i, counter_scan[2*i], index);
             if(index < k) {
                 updatedNN[index] = currentNN[i];
             }
@@ -450,17 +448,8 @@ void initValues(float3 *values, float &minx, float &miny, float &minz, float &ma
     maxlen = fmax(xl,fmax(yl, zl));
 }
 
-int main(void)
-{
-    int numData = 1 << 20;
-    int numQueries = 1 << 10;
-    uint32_t k = 1 << 5;
+int nearestNeighbors(int numData, int numQueries, uint32_t k) {
     int numElements = numData + numQueries;
-
-    assert(2*k <= numData);
-
-    //srand(time(NULL));
-
     size_t valueSize = numElements * sizeof(float3);
     float3 *values = (float3 *) malloc(valueSize);
 
@@ -521,7 +510,7 @@ int main(void)
     gettimeofday(&tval_before, NULL);
 
     for(int j = 0; j < 5; ++j) {
-        printf("Iteration: %d\n",j);
+        fprintf(stderr, "Iteration: %d\n",j);
         float shift = j*0.05;
         uint32_t intShift = (uint32_t) (shift * (1 << 21));
         getMortons(devValues, devIntValues, devMortons,
@@ -543,9 +532,9 @@ int main(void)
         // for(int a = 0; a < numElements; ++a) {
         //   uint4 point = intValues[a];
         //   if(point.w < numData) {
-        //     printf("D(%u,%u,%u,%u)\n", point.x, point.y, point.z, point.w);
+        //     fprintf(stderr, "D(%u,%u,%u,%u)\n", point.x, point.y, point.z, point.w);
         //   } else {
-        //     printf("Q(%u,%u,%u,%u)\n", point.x, point.y, point.z, point.w);
+        //     fprintf(stderr, "Q(%u,%u,%u,%u)\n", point.x, point.y, point.z, point.w);
         //   }
         // }
 
@@ -558,16 +547,21 @@ int main(void)
 
     gettimeofday(&tval_after, NULL);
     timersub(&tval_after, &tval_before, &tval_result);
+    int64_t seconds = (int64_t) tval_result.tv_sec;
+    int64_t micros = (int64_t) tval_result.tv_usec;
+    uint64_t ms = seconds * 1000 + (micros / 1000);
+    uint64_t qsperms = numQueries / ms;
+    printf("%d,%d,%u,%lu\n", numData, numQueries, k, qsperms);
 
     err = cudaMemcpy(nearest, devNearest, nearestSize, cudaMemcpyDeviceToHost);
     handleError(err, __LINE__);
     for(int a = 0; a < numQueries; ++a) {
         if(a >= 0.99*numQueries) {
-            printf("%d: [", a);
+            fprintf(stderr, "%d: [", a);
             for(int b = 0; b < k; ++b) {
-                printf("(%u,%u),", (uint32_t) (nearest[a*k + b] >> 32), (uint32_t) (nearest[a*k + b]) );
+                fprintf(stderr, "(%u,%u),", (uint32_t) (nearest[a*k + b] >> 32), (uint32_t) (nearest[a*k + b]) );
             }
-            printf("]\n\n");
+            fprintf(stderr, "]\n\n");
         }
     }
     err = cudaMemcpy(intValues, devIntValues, intSize, cudaMemcpyDeviceToHost);
@@ -575,7 +569,7 @@ int main(void)
     err = cudaMemcpy(data, devData, dataSize, cudaMemcpyDeviceToHost);
     handleError(err, __LINE__);
 
-    printf("Time elapsed: %ld.%06ld\n", (long int)tval_result.tv_sec, (long int)tval_result.tv_usec);
+    fprintf(stderr, "Time elapsed: %ld.%06ld\n", (long int)tval_result.tv_sec, (long int)tval_result.tv_usec);
 
     // Free device memory
     err = cudaFree(devValues);
@@ -611,4 +605,21 @@ int main(void)
     handleError(err, __LINE__);
 
     return EXIT_SUCCESS;
+
+}
+
+int main(void)
+{
+    int numData = 21;
+    int numQueries = 7;
+    uint32_t k = 6;
+
+    assert(2*k <= numData);
+
+    printf("Data,Queries,K,Queries per ms\n");
+   //srand(time(NULL));
+   for(int i = 0; numQueries + i <= 21; ++i) {
+       int queries = (numQueries + i);
+       nearestNeighbors(1 << numData, 1 <<  queries, 1 << k);
+   }
 }
