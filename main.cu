@@ -197,12 +197,14 @@ __global__
 void approxNearest(uint64_t *queryIndices, uint4 *values, uint4 *data, uint64_t *currentNearest, uint32_t k, int numQueries, int numData) {
     extern __shared__ uint64_t candidates[];
     uint32_t q = (uint32_t) blockIdx.x;
+    uint32_t numThreads = (uint32_t) blockDim.x;
     if(q < numQueries) {
         uint64_t iq_both  = queryIndices[q]; // data point right to query point
         uint32_t iq = (uint32_t) (iq_both >> 32);
         uint32_t index = (uint32_t) iq_both;
         uint4 querypoint = values[index];
         uint32_t i = (uint32_t) threadIdx.x;
+        //PAD to power of 2
         if(i < k) {
             iq = min(numData-k-1, max(k-1, iq));
             uint32_t leftidx = iq-i;
@@ -214,9 +216,14 @@ void approxNearest(uint64_t *queryIndices, uint4 *values, uint4 *data, uint64_t 
 
             candidates[2*i] = (leftdist << 32) | left.w;
             candidates[2*i+1] = (rightdist << 32) | right.w;
-            __syncthreads();
-            bitonicSort(candidates, 2*k, i);
+        } else if(i < numThreads-1) {
+            candidates[2*i] = UINT64_MAX;
+            candidates[2*i+1] = UINT64_MAX;
+        } else if(i < numThreads) {
+            candidates[2*i] = UINT64_MAX;
         }
+        __syncthreads();
+        bitonicSort(candidates, 2*numThreads, i);
         //Write to global memory
         if(i < k) {
             currentNearest[q*k+i] = candidates[i];
@@ -224,10 +231,17 @@ void approxNearest(uint64_t *queryIndices, uint4 *values, uint4 *data, uint64_t 
     }
 }
 
+uint32_t log2(uint32_t x) {
+   uint32_t l;
+   for(l=0; x>1; x = (x >> 1), l++);
+   return l;
+} 
+
 void findCandidates(uint64_t *queryIndices, uint4 *values, uint4 *data, uint64_t *nearest, const uint32_t k, int numQueries, int numData) {
-    int threadsPerBlock = k;
+    int logn = log2(k);
+    int threadsPerBlock = 1 << (logn+1);
     int blocksPerGrid = numQueries;
-    approxNearest<<<blocksPerGrid, threadsPerBlock, 2*k*sizeof(uint64_t)>>>(queryIndices, values, data, nearest, k, numQueries, numData);
+    approxNearest<<<blocksPerGrid, threadsPerBlock, 2*threadsPerBlock*sizeof(uint64_t)>>>(queryIndices, values, data, nearest, k, numQueries, numData);
 
     cudaError_t err = cudaSuccess;
     err = cudaGetLastError();
@@ -292,11 +306,12 @@ int createPrefixList(uint4 *devIntValues, uint32_t *devPrefixQueryIndex, int num
 __global__
 void mergeNearest(uint64_t *nearest, uint4 *values, uint4 *data, uint64_t *queryIndices, const uint32_t k, int numQueries, int numData) {
     extern __shared__ uint64_t shared[];
+    uint32_t numThreads = (uint32_t) blockDim.x;
     uint64_t *currentNN = (uint64_t *) shared;
     uint32_t *counter = (uint32_t *) &currentNN[k];
     uint32_t *counter_scan = (uint32_t *) &counter[2*k];
     uint64_t *candidates = (uint64_t *) &counter_scan[2*k];
-    uint64_t *updatedNN = (uint64_t *) &candidates[2*k];
+    uint64_t *updatedNN = (uint64_t *) &candidates[numThreads];
     uint32_t i = (uint32_t) threadIdx.x;
     uint32_t q = (uint32_t) blockIdx.x;
 
@@ -343,6 +358,10 @@ void mergeNearest(uint64_t *nearest, uint4 *values, uint4 *data, uint64_t *query
                     offset = atomicAdd(&counter[loc*2], (uint32_t) 1);
                 }
             }
+        } else if(i < numThreads) {
+            candidate = UINT64_MAX;
+            active = false;
+            offset = 0;
         }
     }
 
@@ -383,19 +402,30 @@ void sortMerged(uint64_t *nearest, uint32_t k, uint32_t numQueries) {
     extern __shared__ uint64_t toSort[];
     uint32_t i = (uint32_t) threadIdx.x;
     uint32_t q = (uint32_t) blockIdx.x;
+    uint32_t numThreads = (uint32_t) blockDim.x;
     if(i < k && q < numQueries) {
         toSort[i] = nearest[q*k+i];
         __syncthreads();
-        bitonicSort2(toSort, k, i);
+    } else if(i < numThreads && q < numQueries) {
+        toSort[i] = UINT64_MAX;
         __syncthreads();
+    }
+    if(i < numThreads + q < numQueries) {
+        bitonicSort2(toSort, numThreads, i);
+        __syncthreads();
+    }
+
+    if(i < k && q < numQueries) {
         nearest[q*k+i] = toSort[i];
     }
+
 }
 
 void mergeStep(uint64_t *nearest, uint4 *values, uint4 *data, uint64_t *queryIndices, const uint32_t k, int numQueries, int numData) {
-    int threadsPerBlock = 2*k;
+    uint32_t logn = log2(k);
+    int threadsPerBlock = 1 << (logn + 2); // 2*k
     int blocksPerGrid = numQueries;
-    size_t sharedMemorySize = k*sizeof(uint64_t) + 2*k*sizeof(uint32_t) + 2*k*sizeof(uint32_t)+ 2*k*sizeof(uint64_t) + k*sizeof(uint64_t);
+    size_t sharedMemorySize = k*sizeof(uint64_t) + 2*k*sizeof(uint32_t) + 2*k*sizeof(uint32_t)+ threadsPerBlock*sizeof(uint64_t) + k*sizeof(uint64_t);
     mergeNearest<<< blocksPerGrid, threadsPerBlock, sharedMemorySize >>>(nearest, values, data, queryIndices, k, numQueries, numData);
 
     cudaError_t err = cudaSuccess;
@@ -403,7 +433,8 @@ void mergeStep(uint64_t *nearest, uint4 *values, uint4 *data, uint64_t *queryInd
     handleError(err, __LINE__);
 
     // nearest now unsorted - sort each block (data points for a query) by distance from q
-    sortMerged<<< blocksPerGrid, k, k*sizeof(uint64_t) >>>(nearest, k, numQueries);
+    int sortSize = 1 << (logn + 1);
+    sortMerged<<< blocksPerGrid, k, sortSize*sizeof(uint64_t) >>>(nearest, k, numQueries);
     err = cudaGetLastError();
     handleError(err, __LINE__);
 }
@@ -691,19 +722,19 @@ void calculateBounds(float3 *values, int numData, int numQuery, int dataElems, i
 
 int main(int argc, char **argv)
 {
-    int numData = 7;
+    int numData = 20;
     int numQueries = 20;
-    uint32_t k = 6;
+    uint32_t k = 10;
 
 
     printf("Data,Queries,K,Queries per ms\n");
    //srand(time(NULL));
-   for(int i = 0; numData + i <= 21; ++i) {
+   for(int i = 0; k + i * 10 <= 160; ++i) {
        int times = (i == 0) ? 4 : 1;
        for(int j = 0; j < times; ++j) {
            int querySize = 1 << numQueries;
-           int dataSize = 1 << (i + numData);
-           int kSize = 1 << k;
+           int dataSize = 1 << numData;
+           int kSize = k + i * 10;
            int size = dataSize + querySize;
            size_t valueSize = size * sizeof(float3);
            float3 *values = (float3 *) malloc(valueSize);
