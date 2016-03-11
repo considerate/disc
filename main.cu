@@ -448,10 +448,8 @@ void initValues(float3 *values, float &minx, float &miny, float &minz, float &ma
     maxlen = fmax(xl,fmax(yl, zl));
 }
 
-int nearestNeighbors(int numData, int numQueries, uint32_t k) {
+int nearestNeighbors(int numData, int numQueries, uint32_t k, float3 *values, float minx, float miny, float minz, float maxlen) {
     int numElements = numData + numQueries;
-    size_t valueSize = numElements * sizeof(float3);
-    float3 *values = (float3 *) malloc(valueSize);
 
     size_t intSize = numElements * sizeof(uint4);
     uint4 *intValues = (uint4 *) malloc(intSize);
@@ -472,6 +470,7 @@ int nearestNeighbors(int numData, int numQueries, uint32_t k) {
 
     cudaError_t err = cudaSuccess;
 
+    size_t valueSize = numElements * sizeof(float3);
     float3 *devValues = NULL;
     err = cudaMalloc((void **) &devValues, valueSize);
     handleError(err, __LINE__);
@@ -500,8 +499,6 @@ int nearestNeighbors(int numData, int numQueries, uint32_t k) {
     err = cudaMalloc((void **) &devNearest, nearestSize);
     handleError(err, __LINE__);
 
-    float minx, miny, minz, maxlen;
-    initValues(values, minx, miny, minz, maxlen, numElements);
 
     err = cudaMemcpy(devValues, values, valueSize, cudaMemcpyHostToDevice);
     handleError(err, __LINE__);
@@ -554,16 +551,16 @@ int nearestNeighbors(int numData, int numQueries, uint32_t k) {
     printf("%d,%d,%u,%lu\n", numData, numQueries, k, qsperms);
 
     err = cudaMemcpy(nearest, devNearest, nearestSize, cudaMemcpyDeviceToHost);
-    handleError(err, __LINE__);
-    for(int a = 0; a < numQueries; ++a) {
-        if(a >= 0.99*numQueries) {
-            fprintf(stderr, "%d: [", a);
-            for(int b = 0; b < k; ++b) {
-                fprintf(stderr, "(%u,%u),", (uint32_t) (nearest[a*k + b] >> 32), (uint32_t) (nearest[a*k + b]) );
-            }
-            fprintf(stderr, "]\n\n");
-        }
-    }
+    //handleError(err, __LINE__);
+    //for(int a = 0; a < numQueries; ++a) {
+    //    if(a >= 0.999*numQueries) {
+    //        fprintf(stderr, "%d: [", a);
+    //        for(int b = 0; b < k; ++b) {
+    //            fprintf(stderr, "(%u,%u),", (uint32_t) (nearest[a*k + b] >> 32), (uint32_t) (nearest[a*k + b]) );
+    //        }
+    //        fprintf(stderr, "]\n\n");
+    //    }
+    //}
     err = cudaMemcpy(intValues, devIntValues, intSize, cudaMemcpyDeviceToHost);
     handleError(err, __LINE__);
     err = cudaMemcpy(data, devData, dataSize, cudaMemcpyDeviceToHost);
@@ -608,18 +605,117 @@ int nearestNeighbors(int numData, int numQueries, uint32_t k) {
 
 }
 
-int main(void)
+int readCSV(const char *filename, float3 *values, int start, int end) {
+    int numElements;
+    FILE *file = fopen(filename, "r");
+    if (file != NULL) {
+        register float x,y,z,scale;
+        fscanf(file, "%d %f\n", &numElements, &scale);
+        for(int i = 0; i < numElements; ++i) {
+            fscanf(file, "%f,%f,%f\n", &x, &y, &z);
+            for(int j = i+start; j < end; j += numElements) {
+                //fprintf(stderr, "%d - %d:%d\n", j, start, end);
+                values[j].x = x*scale;
+                values[j].y = y*scale;
+                values[j].z = z*scale;
+            }
+        }
+    }
+    fclose(file);
+    return numElements;
+} 
+
+void calculateBounds(float3 *values, int numData, int numQuery, int dataElems, int end, float &minx, float &miny, float &minz, float &maxlen) {
+    minx = FLT_MAX;
+    miny = FLT_MAX;
+    minz = FLT_MAX;
+
+    float maxx = FLT_MIN;
+    float maxy = FLT_MIN;
+    float maxz = FLT_MIN;
+    for(int i = 0; i < numData; ++i) {
+        if(i >= dataElems) {
+            break;
+        }
+        if(values[i].x < minx) {
+            minx = values[i].x;
+        }
+        if(values[i].x > maxx) {
+            maxx = values[i].x;
+        }
+        if(values[i].y < miny) {
+            miny = values[i].y;
+        }
+        if(values[i].y > maxy) {
+            maxy = values[i].y;
+        }
+        if(values[i].z < minz) {
+            minz = values[i].z;
+        }
+        if(values[i].z > maxz) {
+            maxz = values[i].z;
+        }
+    }
+
+    for(int j = 0; j < numQuery; ++j) {
+        int i = j + dataElems;
+        if(i >= end) {
+            break;
+        }
+        if(values[i].x < minx) {
+            minx = values[i].x;
+        }
+        if(values[i].x > maxx) {
+            maxx = values[i].x;
+        }
+        if(values[i].y < miny) {
+            miny = values[i].y;
+        }
+        if(values[i].y > maxy) {
+            maxy = values[i].y;
+        }
+        if(values[i].z < minz) {
+            minz = values[i].z;
+        }
+        if(values[i].z > maxz) {
+            maxz = values[i].z;
+        }
+    }
+    float xl, yl, zl;
+    xl = maxx-minx;
+    yl = maxy-miny;
+    zl = maxz-minz;
+    maxlen = fmax(xl,fmax(yl, zl));
+}
+    
+
+int main(int argc, char **argv)
 {
-    int numData = 21;
-    int numQueries = 7;
+    int numData = 7;
+    int numQueries = 20;
     uint32_t k = 6;
 
-    assert(2*k <= numData);
 
     printf("Data,Queries,K,Queries per ms\n");
    //srand(time(NULL));
-   for(int i = 0; numQueries + i <= 21; ++i) {
-       int queries = (numQueries + i);
-       nearestNeighbors(1 << numData, 1 <<  queries, 1 << k);
+   for(int i = 0; numData + i <= 21; ++i) {
+       int times = (i == 0) ? 4 : 1;
+       for(int j = 0; j < times; ++j) {
+           int querySize = 1 << numQueries;
+           int dataSize = 1 << (i + numData);
+           int kSize = 1 << k;
+           int size = dataSize + querySize;
+           size_t valueSize = size * sizeof(float3);
+           float3 *values = (float3 *) malloc(valueSize);
+           float minx, miny, minz, maxlen;
+           if(argc == 3) {
+               int dataPoints = readCSV(argv[1], values, 0, dataSize);
+               int queryPoints = readCSV(argv[2], values, dataSize, size);
+               calculateBounds(values, dataPoints, queryPoints, dataSize, size, minx, miny, minz, maxlen);
+           } else {
+               initValues(values, minx, miny, minz, maxlen, size);
+           }
+           nearestNeighbors(dataSize, querySize, kSize, values,minx,miny,minz,maxlen);
+       }
    }
 }
