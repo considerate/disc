@@ -1,9 +1,5 @@
-#ifndef __MORTON_CU
-#define __MORTON_CU
-#include <float.h>
-#include <cuda_runtime.h>
-#include <vector_types.h>
-#define BITS_PER_COORD (21)
+#include "morton.cuh"
+
 inline void morton3D_Decode_for(const uint64_t m, unsigned int& x, unsigned int& y, unsigned int& z){
     x = 0; y = 0; z = 0;
     unsigned int checkbits = (sizeof(uint64_t) <= 4) ? 10 : 21;
@@ -79,4 +75,3 @@ void computeMortons(const uint4 *values, uint64_t *mortons, int numData, int num
         mortons[i] = morton;
     }
 }
-#endif
