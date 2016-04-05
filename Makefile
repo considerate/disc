@@ -226,6 +226,12 @@ else
 	@echo "Sample is ready - all dependencies have been met"
 endif
 
+float3math.o: float3math.cu
+	$(EXEC) $(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -c $<
+
+coords.o: coords.cu
+	$(EXEC) $(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -c $<
+
 morton.o: morton.cu
 	$(EXEC) $(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -c $<
 
@@ -243,7 +249,7 @@ binarySearch: binarySearch.o
 	$(EXEC) mkdir -p ../../bin/$(TARGET_ARCH)/$(TARGET_OS)/$(BUILD_TYPE)
 	$(EXEC) cp $@ ../../bin/$(TARGET_ARCH)/$(TARGET_OS)/$(BUILD_TYPE)
 
-libdisc.a: morton.o knn.o
+libdisc.a: float3math.o morton.o coords.o knn.o
 	ar -rv $@ $^
 
 disc: libdisc.a main.o

@@ -43,8 +43,27 @@ inline float scaleValue(float x, float minx, float maxlen) {
 
 
 __global__
-void scalePoints(const float3 *values, uint4 *intValues, int numElements, uint32_t intShift,
-      float minx, float miny, float minz, float maxlen) {
+void scalePoints(const float3 *values, uint32_t *indices, uint4 *intValues, int numElements, uint32_t intShift,
+      float3pair xpair, float3pair ypair, float3pair zpair) {
+        int i = blockIdx.x * blockDim.x + threadIdx.x;
+        if (i < numElements) {
+            float minx = xpair.first.get()->x;
+            float maxx = xpair.second.get()->x;
+            float miny = ypair.first.get()->y;
+            float maxy = ypair.second.get()->y;
+            float minz = zpair.first.get()->z;
+            float maxz = zpair.second.get()->z;
+            float maxlen = fmax(maxx - minx, fmax(maxy - miny, maxz - minz));
+            intValues[i].x = toInt(scaleValue(values[i].x, minx, maxlen))+intShift;
+            intValues[i].y = toInt(scaleValue(values[i].y, miny, maxlen))+intShift;
+            intValues[i].z = toInt(scaleValue(values[i].z, minz, maxlen))+intShift;
+            intValues[i].w = indices[i];
+        }
+}
+
+__global__
+void scalePointsOld(const float3 *values, uint4 *intValues, int numElements, uint32_t intShift,
+    float minx, float miny, float minz, float maxlen) {
         int i = blockIdx.x * blockDim.x + threadIdx.x;
         if (i < numElements) {
             intValues[i].x = toInt(scaleValue(values[i].x, minx, maxlen))+intShift;
@@ -53,6 +72,25 @@ void scalePoints(const float3 *values, uint4 *intValues, int numElements, uint32
             intValues[i].w = i;
         }
 }
+
+__global__
+void devScaleValues(float3 *values, int numElements, float normalScale, float tangentScale) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if(i < numElements) {
+      float3 v = values[i];
+      v.x *= tangentScale;  
+      v.y *= normalScale;  
+      v.z *= tangentScale;  
+      values[i] = v;
+    }
+}
+
+void scaleValues(float3 *values, int numElements, float normalScale, float tangentScale) {
+    int threadsPerBlock = 256;
+    int blocksPerGrid = (numElements + threadsPerBlock - 1) / threadsPerBlock;
+    devScaleValues<<<blocksPerGrid, threadsPerBlock>>>(values, numElements, normalScale, tangentScale);
+}
+
 __global__
 void computeMortons(const uint4 *values, uint64_t *mortons, int numData, int numQueries) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
