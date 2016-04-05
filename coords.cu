@@ -34,19 +34,33 @@ float3 multiply4x4x3(float *matrix, float3 a) {
     float v = a.x * matrix[1] + a.y * matrix[5] + a.z * matrix[9] + matrix[13];
     float w = a.x * matrix[2] + a.y * matrix[6] + a.z * matrix[10] + matrix[14];
     float3 result = {u,v,w};
+    //printf("{%f %f %f} -> {%f %f %f}\n", a.x, a.y, a.z, u,v,w);
+    //printf("[[%f %f %f %f]\n[%f %f %f %f]\n[%f %f %f %f]\n[%f %f %f %f]]\n",
+    //    matrix[0],
+    //    matrix[1],
+    //    matrix[2],
+    //    matrix[3],
+    //    matrix[4],
+    //    matrix[5],
+    //    matrix[6],
+    //    matrix[7],
+    //    matrix[8],
+    //    matrix[9],
+    //    matrix[10],
+    //    matrix[11],
+    //    matrix[12],
+    //    matrix[13],
+    //    matrix[14],
+    //    matrix[15]
+    //);
     return result;
 }
 
 __global__
 void transformPoints(float3 *values, uint32_t numValues, float *matrix,  float3 *result) {
-    __shared__ float m[16];
     int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if(i < 16) {
-        m[i] = matrix[i];
-    } 
-    __syncthreads();
     if(i < numValues) {
-        result[i] = multiply4x4x3(m, values[i]);
+        result[i] = multiply4x4x3(matrix, values[i]);
     }
 }
 

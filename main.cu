@@ -1,9 +1,9 @@
 #include "knn.cuh"
 /*
 int main(int argc, char **argv) {
-    int querySize = 1 << 20;
-    int dataSize = 1 << 20;
-    int kSize = 70;
+    int querySize = 1 << 3;
+    int dataSize = 1 << 23;
+    int kSize = 3;
     int size = dataSize + querySize;
     srand(0);
     size_t valueSize = size * sizeof(float3);

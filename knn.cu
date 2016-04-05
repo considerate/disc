@@ -294,7 +294,7 @@ float3 toFloat3(uint4 value) {
 
 __host__ __device__
 uint4 toUint4(float3 value, uint32_t index) {
-    uint32_t scale = (1 << 21);
+    uint32_t scale = (1 << 30);
     uint4 result = {value.x * scale, value.y * scale, value.z * scale, index};
     return result;
 }
@@ -321,7 +321,7 @@ float3 mult(float3 a, float3 b) {
 }
 
 __global__
-void approxNearestEllipsoid(uint64_t *queryIndices, uint4 *values, uint4 *data, uint64_t *currentNearest, uint32_t k, uint32_t lambdak, int numQueries, int numData,
+void approxNearestEllipsoid(uint64_t *queryIndices, uint4 *values, float3 *floatvalues, uint32_t *indices, uint4 *data, uint64_t *currentNearest, uint32_t k, uint32_t lambdak, int numQueries, int numData,
     float3 normalScaling, float3 tangentScaling,
     CoordinateSystem bucketSpace, float3 querynormals[]) {
     extern __shared__ uint64_t candidates[];
@@ -339,7 +339,7 @@ void approxNearestEllipsoid(uint64_t *queryIndices, uint4 *values, uint4 *data, 
         querypoint = values[index];
     }
     if(q < numQueries) {
-        float3 query = toFloat3(querypoint);
+        float3 query = floatvalues[indices[querypoint.w]];
         float3 querynormal = querynormals[querypoint.w - numData];
         float3 tangent0 = normalize(findArbitraryTangent(querynormal));
         float3 tangent1 = cross(querynormal, tangent0);
@@ -360,8 +360,8 @@ void approxNearestEllipsoid(uint64_t *queryIndices, uint4 *values, uint4 *data, 
             uint4 left = data[leftidx];
             uint4 right = data[rightidx];
             //printf("Index %u - %u: %u %u\n", i, index, left.w, right.w);
-            float3 fleft = toFloat3(left);
-            float3 fright = toFloat3(right);
+            float3 fleft = floatvalues[left.w];
+            float3 fright = floatvalues[right.w];
              
             // move to ellipsoid coords
             query = multiply4x4x3KNN(toEllipsoid, query);
@@ -411,7 +411,7 @@ void findCandidates(uint64_t *queryIndices, uint4 *values, uint4 *data, uint64_t
     handleError(err, __LINE__);
 }
 
-void findCandidatesEllipsoid(uint64_t *queryIndices, uint4 *values, uint4 *data, uint64_t *nearest, const uint32_t k, int numQueries, int numData,
+void findCandidatesEllipsoid(uint64_t *queryIndices, uint4 *values, float3 *floatvalues, uint32_t *indices, uint4 *data, uint64_t *nearest, const uint32_t k, int numQueries, int numData,
     float3 normalScaling, float3 tangentScaling,
     CoordinateSystem bucketSpace, float3 querynormals[]) {
     
@@ -420,7 +420,7 @@ void findCandidatesEllipsoid(uint64_t *queryIndices, uint4 *values, uint4 *data,
     int threadsPerBlock = 1 << (logn+1);
     int blocksPerGrid = numQueries;
     approxNearestEllipsoid<<<blocksPerGrid, threadsPerBlock, 2*threadsPerBlock*sizeof(uint64_t)+16*sizeof(float)>>>(
-        queryIndices, values, data, nearest, k, lambdak, numQueries, numData,
+        queryIndices, values, floatvalues, indices, data, nearest, k, lambdak, numQueries, numData,
         normalScaling, tangentScaling,
         bucketSpace, querynormals
     );
@@ -600,7 +600,7 @@ void mergeNearest(uint64_t *nearest, uint4 *values, uint4 *data, uint64_t *query
 }
 
 __global__
-void mergeNearestEllipsoid(uint64_t *nearest, uint4 *values, uint4 *data, uint64_t *queryIndices, const uint32_t k, uint32_t lambdak, int numQueries, int numData,
+void mergeNearestEllipsoid(uint64_t *nearest, uint4 *values, float3 *floatvalues, uint32_t *indices, uint4 *data, uint64_t *queryIndices, const uint32_t k, uint32_t lambdak, int numQueries, int numData,
     float3 normalScaling, float3 tangentScaling,
     CoordinateSystem bucketSpace,  float3 querynormals[], uint32_t intShift) {
     extern __shared__ uint64_t shared[];
@@ -636,8 +636,7 @@ void mergeNearestEllipsoid(uint64_t *nearest, uint4 *values, uint4 *data, uint64
     uint32_t loc;
     bool active = true;
     if(q < numQueries) {
-        uint4 qp = {querypoint.x - intShift, querypoint.y - intShift, querypoint.z - intShift, querypoint.w};
-        float3 query = toFloat3(qp);
+        float3 query = floatvalues[indices[querypoint.w]];
         iq = min(numData-lambdak-1, max(lambdak-1, iq));
         float3 querynormal = querynormals[querypoint.w - numData];
         float3 tangent0 = normalize(findArbitraryTangent(querynormal));
@@ -660,8 +659,7 @@ void mergeNearestEllipsoid(uint64_t *nearest, uint4 *values, uint4 *data, uint64
                 idx = iq-(i/2);
             }
             uint4 datapoint = data[idx];
-            uint4 dp = {datapoint.x - intShift, datapoint.y - intShift, datapoint.z - intShift, datapoint.w};
-            float3 point = toFloat3(dp);
+            float3 point = floatvalues[datapoint.w];
             // move to ellipsoid coords
             query = multiply4x4x3KNN(toEllipsoid, query);
             point = multiply4x4x3KNN(toEllipsoid, point);
@@ -773,7 +771,7 @@ void mergeStep(uint64_t *nearest, uint4 *values, uint4 *data, uint64_t *queryInd
     handleError(err, __LINE__);
 }
 
-void mergeStepEllipsoid(uint64_t *nearest, uint4 *values, uint4 *data, uint64_t *queryIndices, const uint32_t k, int numQueries, int numData,
+void mergeStepEllipsoid(uint64_t *nearest, uint4 *values, float3 *floatvalues, uint32_t *indices, uint4 *data, uint64_t *queryIndices, const uint32_t k, int numQueries, int numData,
     float3 normalScaling, float3 tangentScaling,
     CoordinateSystem bucketSpace, float3 querynormals[], uint32_t intShift) {
     uint32_t lambdak = k * LAMBDA;
@@ -781,7 +779,7 @@ void mergeStepEllipsoid(uint64_t *nearest, uint4 *values, uint4 *data, uint64_t 
     int threadsPerBlock = 1 << (logn + 2); // 2*k
     int blocksPerGrid = numQueries;
     size_t sharedMemorySize = k*sizeof(uint64_t) + 2*lambdak*sizeof(uint32_t) + 2*lambdak*sizeof(uint32_t) + threadsPerBlock*sizeof(uint64_t) + k*sizeof(uint64_t) + 16 * sizeof(float);
-    mergeNearestEllipsoid<<< blocksPerGrid, threadsPerBlock, sharedMemorySize >>>(nearest, values, data, queryIndices, k, lambdak, numQueries, numData,
+    mergeNearestEllipsoid<<< blocksPerGrid, threadsPerBlock, sharedMemorySize >>>(nearest, values, floatvalues, indices, data, queryIndices, k, lambdak, numQueries, numData,
     normalScaling, tangentScaling, bucketSpace, querynormals, intShift);
 
     cudaError_t err = cudaSuccess;
@@ -838,6 +836,8 @@ void initValues(float3 *values, float3 *querynormals, int numElements, int numQu
     }
     for (int i = 0; i < numElements; ++i) {
         values[i].x = rand()/randMax;
+        values[i].y = rand()/randMax;
+        values[i].z = rand()/randMax;
     }
 }
 
@@ -1066,7 +1066,14 @@ int nearestNeighborsEllipsoid(int numData, int numQueries, uint32_t k, float3 *v
             mult(tangent1, tangentScaling)
         };
 
-        moveToCoordSpace(unit, bucketSpace, currentValues, numElementsInside, currentValues);
+        moveToCoordSpace(unit, bucketSpace, currentValues, numElements, currentValues);
+
+//        err = cudaMemcpy(values, currentValues, valueSize, cudaMemcpyDeviceToHost);
+//        handleError(err, __LINE__);
+//        for(int a = 1000; a < numElements; a++) {
+//            float3 value = values[a];
+//            fprintf(stderr, "%d {%f %f %f}\n", a, value.x, value.y, value.z);
+//        }
 
         thrust::device_ptr<float3> dev_ptr = thrust::device_pointer_cast(currentValues);
         float3pair xpair = thrust::minmax_element(dev_ptr, dev_ptr + numElementsInside, compare_x());
@@ -1074,7 +1081,7 @@ int nearestNeighborsEllipsoid(int numData, int numQueries, uint32_t k, float3 *v
         float3pair zpair = thrust::minmax_element(dev_ptr, dev_ptr + numElementsInside, compare_z());
         uint32_t *devReverseIndices = devMarks;
         reverseIndices(devIndices, numElements, devReverseIndices);
-        for (int j = 0; j < 5; ++j) {
+        for (int j = 0; j < 1; ++j) {
 //            fprintf(stderr, "Iteration: %d\n",j);
             float shift = j*0.05;
             uint32_t intShift = (uint32_t) (shift * (1 << 21));
@@ -1090,12 +1097,12 @@ int nearestNeighborsEllipsoid(int numData, int numQueries, uint32_t k, float3 *v
             pointCompaction(devIntValues, devMortons, devPrefixQueryIndex, devReverseIndices, devData, devQueryIndices, numData, numElementsInside);
 
             if(j == 0) {
-                findCandidatesEllipsoid(devQueryIndices, devIntValues, devData, devNearest, k, numQueriesInside, numData, normalScaling, tangentScaling, bucketSpace, devQueryNormals);
+                findCandidatesEllipsoid(devQueryIndices, devIntValues, currentValues, devIndices, devData, devNearest, k, numQueriesInside, numData, normalScaling, tangentScaling, bucketSpace, devQueryNormals);
             } else {
-                mergeStepEllipsoid(devNearest, devIntValues, devData, devQueryIndices, k, numQueriesInside, numData, normalScaling, tangentScaling, bucketSpace, devQueryNormals, intShift);
+                mergeStepEllipsoid(devNearest, devIntValues, currentValues, devIndices, devData, devQueryIndices, k, numQueriesInside, numData, normalScaling, tangentScaling, bucketSpace, devQueryNormals, intShift);
             }
         }
-        moveToCoordSpace(bucketSpace, unit, currentValues, numElementsInside, currentValues);
+        moveToCoordSpace(bucketSpace, unit, currentValues, numElements, currentValues);
     }
 
     gettimeofday(&tval_after, NULL);
@@ -1112,9 +1119,17 @@ int nearestNeighborsEllipsoid(int numData, int numQueries, uint32_t k, float3 *v
     err = cudaMemcpy(nearest, devNearest, nearestSize, cudaMemcpyDeviceToHost);
     handleError(err, __LINE__);
     
+    uint32_t *indices = (uint32_t *) malloc(prefixSize);
+    err = cudaMemcpy(indices, devIndices, prefixSize, cudaMemcpyDeviceToHost);
+    handleError(err, __LINE__);
 //    for(int i = 0; i < numQueries; i++){
+//        float3 query = values[i+numData];
+//        float3 n = querynormals[i];
+//        fprintf(stderr,"(%f,%f,%f)<(%f,%f,%f): ", query.x, query.y, query.z, n.x, n.y, n.z);
 //        for(int j = 0; j< k; j++){
-//            fprintf(stderr,"%u(%u) ", (uint32_t) nearest[i*k+j], (uint32_t) (nearest[i*k+j] >> 32));
+//            uint32_t valueIndex = (uint32_t) nearest[i*k+j];
+//            float3 value = values[valueIndex];
+//            fprintf(stderr,"%u(%u) (%f,%f,%f) - ", (uint32_t) nearest[i*k+j], (uint32_t) (nearest[i*k+j] >> 32), value.x, value.y, value.z);
 //        }   
 //        fprintf(stderr,"\n");
 //    }
