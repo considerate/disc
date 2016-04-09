@@ -756,7 +756,7 @@ void mergeStep(uint64_t *nearest, uint4 *values, uint4 *data, uint64_t *queryInd
     uint32_t logn = log2(lambdak - 1);
     int threadsPerBlock = 1 << (logn + 2); // 2*k
     int blocksPerGrid = numQueries;
-    size_t sharedMemorySize = k*sizeof(uint64_t) + 2*lambdak*sizeof(uint32_t) + 2*lambdak*sizeof(uint32_t) + threadsPerBlock*sizeof(uint64_t) + k*sizeof(uint64_t);
+    size_t sharedMemorySize = k*sizeof(uint64_t) + 2*k*sizeof(uint32_t) + 2*k*sizeof(uint32_t) + threadsPerBlock*sizeof(uint64_t) + k*sizeof(uint64_t);
     mergeNearest<<< blocksPerGrid, threadsPerBlock, sharedMemorySize >>>(nearest, values, data, queryIndices, k, lambdak, numQueries, numData);
 
     cudaError_t err = cudaSuccess;
@@ -778,7 +778,7 @@ void mergeStepEllipsoid(uint64_t *nearest, uint4 *values, float3 *floatvalues, u
     uint32_t logn = log2(lambdak - 1);
     int threadsPerBlock = 1 << (logn + 2); // 2*k
     int blocksPerGrid = numQueries;
-    size_t sharedMemorySize = k*sizeof(uint64_t) + 2*lambdak*sizeof(uint32_t) + 2*lambdak*sizeof(uint32_t) + threadsPerBlock*sizeof(uint64_t) + k*sizeof(uint64_t) + 16 * sizeof(float);
+    size_t sharedMemorySize = k*sizeof(uint64_t) + 2*k*sizeof(uint32_t) + 2*k*sizeof(uint32_t) + threadsPerBlock*sizeof(uint64_t) + k*sizeof(uint64_t) + 16 * sizeof(float);
     mergeNearestEllipsoid<<< blocksPerGrid, threadsPerBlock, sharedMemorySize >>>(nearest, values, floatvalues, indices, data, queryIndices, k, lambdak, numQueries, numData,
     normalScaling, tangentScaling, bucketSpace, querynormals, intShift);
 
