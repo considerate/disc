@@ -510,8 +510,8 @@ void mergeNearest(uint64_t *nearest, uint4 *values, uint4 *data, uint64_t *query
     uint32_t numThreads = (uint32_t) blockDim.x;
     uint64_t *currentNN = (uint64_t *) shared;
     uint32_t *counter = (uint32_t *) &currentNN[k];
-    uint32_t *counter_scan = (uint32_t *) &counter[2*lambdak];
-    uint64_t *candidates = (uint64_t *) &counter_scan[2*lambdak];
+    uint32_t *counter_scan = (uint32_t *) &counter[2*k];
+    uint64_t *candidates = (uint64_t *) &counter_scan[2*k];
     uint64_t *updatedNN = (uint64_t *) &candidates[numThreads];
     uint32_t i = (uint32_t) threadIdx.x;
     uint32_t q = (uint32_t) blockIdx.x;
@@ -520,7 +520,7 @@ void mergeNearest(uint64_t *nearest, uint4 *values, uint4 *data, uint64_t *query
         currentNN[i] = nearest[q*k+i];
     }
 
-    if(i < 2*lambdak && q < numQueries) {
+    if(i < 2*k && q < numQueries) {
         counter[i] = i & 1; //1 if odd
     }
     __syncthreads();
@@ -569,13 +569,13 @@ void mergeNearest(uint64_t *nearest, uint4 *values, uint4 *data, uint64_t *query
     // Do a block-wise parallel exclusive prefix sum over counter
     __syncthreads();
     if(i == 0) {
-        thrust::exclusive_scan(thrust::device, counter, counter + (2*lambdak), counter_scan);
+        thrust::exclusive_scan(thrust::device, counter, counter + (2*k), counter_scan);
     }
     __syncthreads();
 
     // for all current nearest
     if(q < numQueries) {
-        if(i < lambdak) {
+        if(i < k) {
             uint32_t index = counter_scan[2*i + 1];
             if(index < k) {
                 updatedNN[index] = currentNN[i];
@@ -607,8 +607,8 @@ void mergeNearestEllipsoid(uint64_t *nearest, uint4 *values, float3 *floatvalues
     uint32_t numThreads = (uint32_t) blockDim.x;
     uint64_t *currentNN = (uint64_t *) shared;
     uint32_t *counter = (uint32_t *) &currentNN[k];
-    uint32_t *counter_scan = (uint32_t *) &counter[2*lambdak];
-    uint64_t *candidates = (uint64_t *) &counter_scan[2*lambdak];
+    uint32_t *counter_scan = (uint32_t *) &counter[2*k];
+    uint64_t *candidates = (uint64_t *) &counter_scan[2*k];
     uint64_t *updatedNN = (uint64_t *) &candidates[numThreads];
     float *toEllipsoid = (float *) &updatedNN[k];
     uint32_t i = (uint32_t) threadIdx.x;
@@ -626,7 +626,7 @@ void mergeNearestEllipsoid(uint64_t *nearest, uint4 *values, float3 *floatvalues
         currentNN[i] = nearest[(querypoint.w-numData)*k+i];
     }
 
-    if(i < 2*lambdak && q < numQueries) {
+    if(i < 2*k && q < numQueries) {
         counter[i] = i & 1; //1 if odd
     }
     __syncthreads();
@@ -690,12 +690,12 @@ void mergeNearestEllipsoid(uint64_t *nearest, uint4 *values, float3 *floatvalues
 
     // Do a block-wise parallel exclusive prefix sum over counter
     __syncthreads();
-    thrust::exclusive_scan(thrust::device, counter, counter + (2*lambdak), counter_scan);
+    thrust::exclusive_scan(thrust::device, counter, counter + (2*k), counter_scan);
     __syncthreads();
 
     // for all current nearest
     if(q < numQueries) {
-        if(i < lambdak) {
+        if(i < k) {
             uint32_t index = counter_scan[2*i + 1];
             if(index < k) {
                 updatedNN[index] = currentNN[i];
