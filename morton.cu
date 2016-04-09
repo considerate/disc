@@ -63,9 +63,16 @@ void scalePoints(const float3 *values, uint32_t *indices, uint4 *intValues, int 
 
 __global__
 void scalePointsOld(const float3 *values, uint4 *intValues, int numElements, uint32_t intShift,
-    float minx, float miny, float minz, float maxlen) {
+      float3pair xpair, float3pair ypair, float3pair zpair) {
         int i = blockIdx.x * blockDim.x + threadIdx.x;
         if (i < numElements) {
+            float minx = xpair.first.get()->x;
+            float maxx = xpair.second.get()->x;
+            float miny = ypair.first.get()->y;
+            float maxy = ypair.second.get()->y;
+            float minz = zpair.first.get()->z;
+            float maxz = zpair.second.get()->z;
+            float maxlen = fmax(maxx - minx, fmax(maxy - miny, maxz - minz));
             intValues[i].x = toInt(scaleValue(values[i].x, minx, maxlen))+intShift;
             intValues[i].y = toInt(scaleValue(values[i].y, miny, maxlen))+intShift;
             intValues[i].z = toInt(scaleValue(values[i].z, minz, maxlen))+intShift;

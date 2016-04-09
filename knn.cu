@@ -138,6 +138,24 @@ void compactPoints(uint4 *values, uint64_t *mortons, uint32_t *prefixQueryIndex,
     }
 }
 
+__global__
+void compactPointsOld(uint4 *values, uint64_t *mortons, uint32_t *prefixQueryIndex, uint4 *data, uint64_t *queryIndices, int numData, int numElements) {
+    uint64_t i = (uint64_t) blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < numElements) {
+        int isQuery = mortons[i] & 1; //check LSD
+        if(isQuery) {
+            uint32_t nthQ = prefixQueryIndex[i];
+            uint64_t qi = i-nthQ+1;
+            uint32_t queryindex = values[i].w - numData;
+            queryIndices[queryindex] = (qi << 32) | i;
+        } else {
+            uint32_t numQueriesToLeft = prefixQueryIndex[i];
+            uint32_t di = i-numQueriesToLeft;
+            data[di] = values[i];
+        }
+    }
+}
+
 __device__  
 uint32_t intSqrt(int64_t remainder) {  
     uint64_t place = (uint64_t) 1 << (sizeof (uint64_t) * 8 - 2); // calculated by precompiler = same runtime as: place = 0x40000000  
@@ -432,12 +450,12 @@ void findCandidatesEllipsoid(uint64_t *queryIndices, uint4 *values, float3 *floa
 
 int getMortonsOld(float3 *devValues, uint4 *devIntValues, uint64_t *devMortons,
         uint32_t shift,
-        float minx, float miny, float minz, float maxlen,
+        float3pair xpair, float3pair ypair, float3pair zpair,
         const int numElements, const int numData, const int numQueries) {
     int threadsPerBlock = 256;
     int blocksPerGrid = (numElements + threadsPerBlock - 1) / threadsPerBlock;
     cudaError_t err = cudaSuccess;
-    scalePointsOld<<<blocksPerGrid, threadsPerBlock>>>(devValues, devIntValues, numElements, shift, minx, miny, minz, maxlen);
+    scalePointsOld<<<blocksPerGrid, threadsPerBlock>>>(devValues, devIntValues, numElements, shift, xpair, ypair, zpair);
     err = cudaGetLastError();
     handleError(err, __LINE__);
     computeMortons<<<blocksPerGrid, threadsPerBlock>>>(devIntValues, devMortons, numData, numQueries);
@@ -468,6 +486,16 @@ int pointCompaction(uint4 *devIntValues, uint64_t *devMortons, uint32_t *devPref
     int threadsPerBlock = 256;
     int blocksPerGrid =(numElements + threadsPerBlock - 1) / threadsPerBlock;
     compactPoints<<<blocksPerGrid, threadsPerBlock>>>(devIntValues, devMortons, devPrefixQueryIndex, reverseIndices, devData, devQueryIndices, numData, numElements);
+    cudaError_t err = cudaSuccess;
+    err = cudaGetLastError();
+    handleError(err, __LINE__);
+    return EXIT_SUCCESS;
+}
+
+int pointCompactionOld(uint4 *devIntValues, uint64_t *devMortons, uint32_t *devPrefixQueryIndex, uint4 *devData, uint64_t *devQueryIndices, int numData, int numElements) {
+    int threadsPerBlock = 256;
+    int blocksPerGrid =(numElements + threadsPerBlock - 1) / threadsPerBlock;
+    compactPointsOld<<<blocksPerGrid, threadsPerBlock>>>(devIntValues, devMortons, devPrefixQueryIndex, devData, devQueryIndices, numData, numElements);
     cudaError_t err = cudaSuccess;
     err = cudaGetLastError();
     handleError(err, __LINE__);
@@ -1177,139 +1205,139 @@ int nearestNeighborsEllipsoid(int numData, int numQueries, uint32_t k, float3 *v
 
 }
 
-// int nearestNeighbors(int numData, int numQueries, uint32_t k, float3 *values, uint64_t *nearest, float minx, float miny, float minz, float maxlen) {
-//     int numElements = numData + numQueries;
-// 
-//     size_t intSize = numElements * sizeof(uint4);
-//     uint4 *intValues = (uint4 *) malloc(intSize);
-// 
-//     size_t dataSize = numData * sizeof(uint4);
-//     uint4 *data = (uint4 *) malloc(dataSize);
-// 
-//     size_t qiSize = numQueries * sizeof(uint64_t);
-//     uint64_t *queryIndices = (uint64_t *) malloc(qiSize);
-// 
-//     size_t nearestSize = numQueries * k * sizeof(uint64_t);
-// 
-//     size_t mortonSize = numElements * sizeof(uint64_t);
-//     uint64_t *mortons = (uint64_t *) malloc(mortonSize);
-// 
-//     size_t prefixSize = numElements * sizeof(uint32_t);
-// 
-//     cudaError_t err = cudaSuccess;
-// 
-//     size_t valueSize = numElements * sizeof(float3);
-//     float3 *devValues = NULL;
-//     err = cudaMalloc((void **) &devValues, valueSize);
-//     handleError(err, __LINE__);
-// 
-//     uint4 *devIntValues = NULL;
-//     err = cudaMalloc((void **) &devIntValues, intSize);
-//     handleError(err, __LINE__);
-// 
-//     uint64_t *devMortons = NULL;
-//     err = cudaMalloc((void **) &devMortons, mortonSize);
-//     handleError(err, __LINE__);
-// 
-//     uint32_t *devPrefixQueryIndex = NULL;
-//     err = cudaMalloc((void **) &devPrefixQueryIndex, prefixSize);
-//     handleError(err, __LINE__);
-// 
-//     uint64_t *devQueryIndices = NULL;
-//     err = cudaMalloc((void **) &devQueryIndices, qiSize);
-//     handleError(err, __LINE__);
-// 
-//     uint4 *devData = NULL;
-//     err = cudaMalloc((void **) &devData, dataSize);
-//     handleError(err, __LINE__);
-// 
-//     uint64_t *devNearest = NULL;
-//     err = cudaMalloc((void **) &devNearest, nearestSize);
-//     handleError(err, __LINE__);
-// 
-// 
-//     err = cudaMemcpy(devValues, values, valueSize, cudaMemcpyHostToDevice);
-//     handleError(err, __LINE__);
-// 
-//     struct timeval tval_before, tval_after, tval_result;
-//     gettimeofday(&tval_before, NULL);
-// 
-// 
-//     thrust::device_ptr<float3> dev_ptr = thrust::device_pointer_cast(devValues);
-//     float3pair xpair = thrust::minmax_element(dev_ptr, dev_ptr + numElements, compare_x());
-//     float3pair ypair = thrust::minmax_element(dev_ptr, dev_ptr + numElements, compare_y());
-//     float3pair zpair = thrust::minmax_element(dev_ptr, dev_ptr + numElements, compare_z());
-//     for(int j = 0; j < 5; ++j) {
-//         fprintf(stderr, "Iteration: %d\n",j);
-//         float shift = j*0.05;
-//         uint32_t intShift = (uint32_t) (shift * (1 << 21));
-//         getMortonsOld(devValues, devIntValues, devMortons,
-//                 intShift,
-//                 minx, miny, minz, maxlen,
-//                 numElements, numData, numQueries);
-// 
-//         err = cudaMemcpy(intValues, devIntValues, intSize, cudaMemcpyDeviceToHost);
-//         handleError(err, __LINE__);
-// 
-//         //sort values in morton code order
-//         thrust::sort_by_key(thrust::device, devMortons, devMortons + numElements, devIntValues);
-//         createPrefixList(devIntValues, devPrefixQueryIndex, numData, numElements);
-//         pointCompaction(devIntValues, devMortons, devPrefixQueryIndex, devData, devQueryIndices, numData, numElements);
-// 
-//         if(j == 0) {
-//             findCandidates(devQueryIndices, devIntValues, devData, devNearest, k, numQueries, numData);
-//         } else {
-//             mergeStep(devNearest, devIntValues, devData, devQueryIndices, k, numQueries, numData);
-//         }
-//     }
-// 
-//     gettimeofday(&tval_after, NULL);
-//     timersub(&tval_after, &tval_before, &tval_result);
-//     int64_t seconds = (int64_t) tval_result.tv_sec;
-//     int64_t micros = (int64_t) tval_result.tv_usec;
-//     uint64_t ms = seconds * 1000 + (micros / 1000);
-//     uint64_t qsperms = numQueries / ms;
-//     printf("%d,%d,%u,%lu\n", numData, numQueries, k, qsperms);
-// 
-//     //ERROR! gets segfault when running test...
-//     err = cudaMemcpy(nearest, devNearest, nearestSize, cudaMemcpyDeviceToHost);
-//     handleError(err, __LINE__);
-// 
-//     fprintf(stderr, "Time elapsed: %ld.%06ld\n", (long int)tval_result.tv_sec, (long int)tval_result.tv_usec);
-// 
-//     // Free device memory
-//     err = cudaFree(devValues);
-//     handleError(err, __LINE__);
-// 
-//     err = cudaFree(devIntValues);
-//     handleError(err, __LINE__);
-// 
-//     err = cudaFree(devMortons);
-//     handleError(err, __LINE__);
-// 
-//     err = cudaFree(devPrefixQueryIndex);
-//     handleError(err, __LINE__);
-// 
-//     err = cudaFree(devQueryIndices);
-//     handleError(err, __LINE__);
-// 
-//     err = cudaFree(devData);
-//     handleError(err, __LINE__);
-// 
-//     err = cudaFree(devNearest);
-//     handleError(err, __LINE__);
-// 
-//     // Free host memory
-//     free(intValues);
-//     free(data);
-//     free(queryIndices);
-//     free(mortons);
-// 
-//     err = cudaDeviceReset();
-//     handleError(err, __LINE__);
-// 
-//     return EXIT_SUCCESS;
-// }
+int nearestNeighbors(int numData, int numQueries, uint32_t k, float3 *values, uint64_t *nearest) {
+    int numElements = numData + numQueries;
+
+    size_t intSize = numElements * sizeof(uint4);
+    uint4 *intValues = (uint4 *) malloc(intSize);
+
+    size_t dataSize = numData * sizeof(uint4);
+    uint4 *data = (uint4 *) malloc(dataSize);
+
+    size_t qiSize = numQueries * sizeof(uint64_t);
+    uint64_t *queryIndices = (uint64_t *) malloc(qiSize);
+
+    size_t nearestSize = numQueries * k * sizeof(uint64_t);
+
+    size_t mortonSize = numElements * sizeof(uint64_t);
+    uint64_t *mortons = (uint64_t *) malloc(mortonSize);
+
+    size_t prefixSize = numElements * sizeof(uint32_t);
+
+    cudaError_t err = cudaSuccess;
+
+    size_t valueSize = numElements * sizeof(float3);
+    float3 *devValues = NULL;
+    err = cudaMalloc((void **) &devValues, valueSize);
+    handleError(err, __LINE__);
+
+    uint4 *devIntValues = NULL;
+    err = cudaMalloc((void **) &devIntValues, intSize);
+    handleError(err, __LINE__);
+
+    uint64_t *devMortons = NULL;
+    err = cudaMalloc((void **) &devMortons, mortonSize);
+    handleError(err, __LINE__);
+
+    uint32_t *devPrefixQueryIndex = NULL;
+    err = cudaMalloc((void **) &devPrefixQueryIndex, prefixSize);
+    handleError(err, __LINE__);
+
+    uint64_t *devQueryIndices = NULL;
+    err = cudaMalloc((void **) &devQueryIndices, qiSize);
+    handleError(err, __LINE__);
+
+    uint4 *devData = NULL;
+    err = cudaMalloc((void **) &devData, dataSize);
+    handleError(err, __LINE__);
+
+    uint64_t *devNearest = NULL;
+    err = cudaMalloc((void **) &devNearest, nearestSize);
+    handleError(err, __LINE__);
+
+
+    err = cudaMemcpy(devValues, values, valueSize, cudaMemcpyHostToDevice);
+    handleError(err, __LINE__);
+
+    struct timeval tval_before, tval_after, tval_result;
+    gettimeofday(&tval_before, NULL);
+
+
+    thrust::device_ptr<float3> dev_ptr = thrust::device_pointer_cast(devValues);
+    float3pair xpair = thrust::minmax_element(dev_ptr, dev_ptr + numElements, compare_x());
+    float3pair ypair = thrust::minmax_element(dev_ptr, dev_ptr + numElements, compare_y());
+    float3pair zpair = thrust::minmax_element(dev_ptr, dev_ptr + numElements, compare_z());
+    for(int j = 0; j < 5; ++j) {
+        fprintf(stderr, "Iteration: %d\n",j);
+        float shift = j*0.05;
+        uint32_t intShift = (uint32_t) (shift * (1 << 21));
+        getMortonsOld(devValues, devIntValues, devMortons,
+                intShift,
+                xpair, ypair, zpair,
+                numElements, numData, numQueries);
+
+        err = cudaMemcpy(intValues, devIntValues, intSize, cudaMemcpyDeviceToHost);
+        handleError(err, __LINE__);
+
+        //sort values in morton code order
+        thrust::sort_by_key(thrust::device, devMortons, devMortons + numElements, devIntValues);
+        createPrefixList(devIntValues, devPrefixQueryIndex, numData, numElements);
+        pointCompactionOld(devIntValues, devMortons, devPrefixQueryIndex, devData, devQueryIndices, numData, numElements);
+
+        if(j == 0) {
+            findCandidates(devQueryIndices, devIntValues, devData, devNearest, k, numQueries, numData);
+        } else {
+            mergeStep(devNearest, devIntValues, devData, devQueryIndices, k, numQueries, numData);
+        }
+    }
+
+    gettimeofday(&tval_after, NULL);
+    timersub(&tval_after, &tval_before, &tval_result);
+    int64_t seconds = (int64_t) tval_result.tv_sec;
+    int64_t micros = (int64_t) tval_result.tv_usec;
+    uint64_t ms = seconds * 1000 + (micros / 1000);
+    uint64_t qsperms = numQueries / ms;
+    printf("%d,%d,%u,%lu\n", numData, numQueries, k, qsperms);
+
+    //ERROR! gets segfault when running test...
+    err = cudaMemcpy(nearest, devNearest, nearestSize, cudaMemcpyDeviceToHost);
+    handleError(err, __LINE__);
+
+    fprintf(stderr, "Time elapsed: %ld.%06ld\n", (long int)tval_result.tv_sec, (long int)tval_result.tv_usec);
+
+    // Free device memory
+    err = cudaFree(devValues);
+    handleError(err, __LINE__);
+
+    err = cudaFree(devIntValues);
+    handleError(err, __LINE__);
+
+    err = cudaFree(devMortons);
+    handleError(err, __LINE__);
+
+    err = cudaFree(devPrefixQueryIndex);
+    handleError(err, __LINE__);
+
+    err = cudaFree(devQueryIndices);
+    handleError(err, __LINE__);
+
+    err = cudaFree(devData);
+    handleError(err, __LINE__);
+
+    err = cudaFree(devNearest);
+    handleError(err, __LINE__);
+
+    // Free host memory
+    free(intValues);
+    free(data);
+    free(queryIndices);
+    free(mortons);
+
+    err = cudaDeviceReset();
+    handleError(err, __LINE__);
+
+    return EXIT_SUCCESS;
+}
 
 int readCSV(const char *filename, float3 *values, int start, int end) {
     int numElements;
