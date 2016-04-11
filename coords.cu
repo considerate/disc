@@ -1,5 +1,4 @@
 #include "coords.cuh"
-#include "float3math.cuh"
 #include <stdio.h>
 
 __device__
@@ -7,6 +6,11 @@ void calculateTransformMatrix(CoordinateSystem from, CoordinateSystem to, float 
     float3 u = to.x;
     float3 v = to.y;
     float3 w = to.z;
+    printf("U: {%f %f %f} V: {%f %f %f} W: {%f %f %f}\n", 
+        u.x, u.y, u.z,
+        v.x, v.y, v.z,
+        w.x, w.y, w.z
+    );
     float3 ts[4] = {from.x, from.y, from.z, {0,0,0}};
     for (int i = 0; i < 4; i++) {
         float3 t = ts[i];
@@ -26,6 +30,26 @@ void calculateTransformMatrix(CoordinateSystem from, CoordinateSystem to, float 
             matrix[i*4+3] = 0;
         }
     }
+
+    printf("[[%f %f %f %f]\n[%f %f %f %f]\n[%f %f %f %f]\n[%f %f %f %f]]\n",
+        matrix[0],
+        matrix[1],
+        matrix[2],
+        matrix[3],
+        matrix[4],
+        matrix[5],
+        matrix[6],
+        matrix[7],
+        matrix[8],
+        matrix[9],
+        matrix[10],
+        matrix[11],
+        matrix[12],
+        matrix[13],
+        matrix[14],
+        matrix[15]
+    );
+
 }
 
 __device__
@@ -34,25 +58,6 @@ float3 multiply4x4x3(float *matrix, float3 a) {
     float v = a.x * matrix[1] + a.y * matrix[5] + a.z * matrix[9] + matrix[13];
     float w = a.x * matrix[2] + a.y * matrix[6] + a.z * matrix[10] + matrix[14];
     float3 result = {u,v,w};
-    //printf("{%f %f %f} -> {%f %f %f}\n", a.x, a.y, a.z, u,v,w);
-    //printf("[[%f %f %f %f]\n[%f %f %f %f]\n[%f %f %f %f]\n[%f %f %f %f]]\n",
-    //    matrix[0],
-    //    matrix[1],
-    //    matrix[2],
-    //    matrix[3],
-    //    matrix[4],
-    //    matrix[5],
-    //    matrix[6],
-    //    matrix[7],
-    //    matrix[8],
-    //    matrix[9],
-    //    matrix[10],
-    //    matrix[11],
-    //    matrix[12],
-    //    matrix[13],
-    //    matrix[14],
-    //    matrix[15]
-    //);
     return result;
 }
 
@@ -61,6 +66,18 @@ void transformPoints(float3 *values, uint32_t numValues, float *matrix,  float3 
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if(i < numValues) {
         result[i] = multiply4x4x3(matrix, values[i]);
+    }
+}
+
+__global__
+void transformPoints(float3idx *values, uint32_t numValues, float *matrix,  float3idx *result) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if(i < numValues) {
+        float3 value = values[i].value;
+        uint32_t idx = values[i].i;
+        value = multiply4x4x3(matrix, value);
+        float3idx res = {value, idx};
+        result[i] = res;
     }
 }
 
@@ -77,6 +94,16 @@ void coordSpaceMatrix(CoordinateSystem from, CoordinateSystem to, float *matrix)
 }
 
 void moveToCoordSpace(CoordinateSystem from, CoordinateSystem to, float3 *values, uint32_t numValues, float3 *result) {
+    float *matrix = NULL;
+    size_t matrixSize = 4*4*sizeof(float);
+    cudaMalloc((void**) &matrix, matrixSize);
+    coordSpaceMatrix(from, to, matrix);
+    int threadsPerBlock = 256;
+    int blocksPerGrid = (numValues + threadsPerBlock - 1) / threadsPerBlock;
+    transformPoints<<<blocksPerGrid, threadsPerBlock>>>(values, numValues, matrix, result);
+}
+
+void moveToCoordSpace(CoordinateSystem from, CoordinateSystem to, float3idx *values, uint32_t numValues, float3idx *result) {
     float *matrix = NULL;
     size_t matrixSize = 4*4*sizeof(float);
     cudaMalloc((void**) &matrix, matrixSize);

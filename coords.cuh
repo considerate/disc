@@ -7,6 +7,7 @@
 #include <vector_types.h>
 #include <stdint.h>
 #include <math.h>
+#include "float3math.cuh"
 
 typedef struct {
     float3 x, y, z;
@@ -19,5 +20,6 @@ inline CoordinateSystem unitSystem() {
 
 void coordSpaceMatrix(CoordinateSystem from, CoordinateSystem to, float *matrix);
 void moveToCoordSpace(CoordinateSystem from, CoordinateSystem to, float3 *values, uint32_t numValues, float3 *result);
+void moveToCoordSpace(CoordinateSystem from, CoordinateSystem to, float3idx *values, uint32_t numValues, float3idx *result);
 
 #endif

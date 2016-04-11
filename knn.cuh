@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <float.h>
 #include <thrust/sort.h>
+#include <thrust/unique.h>
 #include <thrust/scan.h>
 #include <thrust/device_vector.h>
 #include <thrust/execution_policy.h>

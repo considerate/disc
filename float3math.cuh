@@ -5,6 +5,10 @@
 #include <vector_types.h>
 #include <stdint.h>
 
+typedef struct {
+    float3 value;
+    uint32_t i;
+} float3idx;
 
 __host__ __device__
 inline float dot (float3 a, float3 b) {

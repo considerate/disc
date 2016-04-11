@@ -1,11 +1,11 @@
 #include "knn.cuh"
-/*
+
 int main(int argc, char **argv) {
-    int querySize = 1 << 3;
-    int dataSize = 1 << 23;
+    int querySize = 1 << 20;
+    int dataSize = 1 << 20;
     int kSize = 3;
     int size = dataSize + querySize;
-    srand(0);
+    srand(time(NULL));
     size_t valueSize = size * sizeof(float3);
     float3 *values = (float3 *) malloc(valueSize);
 //  float3 values[] = {
@@ -20,9 +20,9 @@ int main(int argc, char **argv) {
     size_t nearestSize = querySize * kSize * sizeof(uint64_t);
     uint64_t *nearest = (uint64_t *) malloc(nearestSize);
     initValues(values, querynormals, size, querySize);
-    return nearestNeighborsEllipsoid(dataSize, querySize, kSize, values, querynormals, nearest);
+    //return nearestNeighborsEllipsoid(dataSize, querySize, kSize, values, querynormals, nearest);
+    return nearestNeighbors(dataSize, querySize, kSize, values,nearest);
 }
-*/
 
 /*
 // DK
@@ -97,7 +97,7 @@ int main(int argc, char **argv) {
    }
 }
 */
-
+/*
 // dd
 int main(int argc, char **argv) {
     int numData = 7;
@@ -132,3 +132,4 @@ int main(int argc, char **argv) {
        }
    }
 }
+*/
