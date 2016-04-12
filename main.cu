@@ -1,11 +1,53 @@
 #include "knn.cuh"
+#include "float3math.cuh"
+
+int readCSV(const char *filename, float3 *values, int start, int end) {
+    int numElements;
+    FILE *file = fopen(filename, "r");
+    if (file != NULL) {
+        register float x,y,z,scale;
+        fscanf(file, "%d %f\n", &numElements, &scale);
+        for(int i = 0; i < numElements; ++i) {
+            fscanf(file, "%f,%f,%f\n", &x, &y, &z);
+            for(int j = i+start; j < end; j += numElements) {
+                values[j].x = x*scale;
+                values[j].y = y*scale;
+                values[j].z = z*scale;
+            }
+        }
+    }
+    fclose(file);
+    return numElements;
+} 
+
+float frand() {
+    return rand()/(float)RAND_MAX;
+}
+
+float sfrand() {
+    return 2.0*frand()-1.0;
+}
+
+void initValues(float3 *values, float3 *querynormals, int numElements, int numQueries) {
+    for (int i = 0; i < numQueries; ++i) {
+        querynormals[i].x = sfrand();
+        querynormals[i].y = sfrand();
+        querynormals[i].z = sfrand();
+        querynormals[i] = normalize(querynormals[i]);
+    }
+    for (int i = 0; i < numElements; ++i) {
+        values[i].x = sfrand();
+        values[i].y = sfrand();
+        values[i].z = sfrand();
+    }
+}
 
 int main(int argc, char **argv) {
-    int querySize = 1 << 20;
-    int dataSize = 1 << 20;
-    int kSize = 3;
+    int querySize = 1 << 13;
+    int dataSize = 1 << 14;
+    int kSize = 80;
     int size = dataSize + querySize;
-    srand(time(NULL));
+    srand(time(0));
     size_t valueSize = size * sizeof(float3);
     float3 *values = (float3 *) malloc(valueSize);
 //  float3 values[] = {
@@ -20,8 +62,9 @@ int main(int argc, char **argv) {
     size_t nearestSize = querySize * kSize * sizeof(uint64_t);
     uint64_t *nearest = (uint64_t *) malloc(nearestSize);
     initValues(values, querynormals, size, querySize);
-    //return nearestNeighborsEllipsoid(dataSize, querySize, kSize, values, querynormals, nearest);
-    return nearestNeighbors(dataSize, querySize, kSize, values,nearest);
+    const uint32_t lambda = 4;
+    return nearestNeighborsEllipsoid(dataSize, querySize, kSize, values, querynormals, nearest, lambda);
+    //return nearestNeighbors(dataSize, querySize, kSize, values,nearest);
 }
 
 /*
