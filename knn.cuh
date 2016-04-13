@@ -23,7 +23,7 @@
 #define DESCENDING (0)
 using namespace std;
 
-int nearestNeighborsEllipsoid(int numData, int numQueries, uint32_t k, float3 *values, float3 *querynormals, uint64_t *nearest, const uint32_t lambda);
+int nearestNeighborsEllipsoid(int numData, int numQueries, uint32_t k, float3 *values, float3 *querynormals, uint64_t *nearest, const uint32_t lambda, const float compressionRate);
 int nearestNeighbors(int numData, int numQueries, uint32_t k, float3 *values, uint64_t *nearest, const uint32_t lambda);
 
 #endif

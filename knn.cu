@@ -914,7 +914,7 @@ void mergeStepEllipsoid(uint64_t *nearest, float3idx *values, float3idx *data, u
     // nearest now unsorted - sort each block (data points for a query) by distance from q
     uint32_t logn2 = log2(k - 1);
     int sortSize = 1 << (logn2 + 1);
-    sortMerged<<< blocksPerGrid, k, sortSize*sizeof(uint64_t) >>>(nearest, k, numQueries, numData, values, queryIndices);
+    sortMerged<<< blocksPerGrid, sortSize, sortSize*sizeof(uint64_t) >>>(nearest, k, numQueries, numData, values, queryIndices);
     err = cudaGetLastError();
     handleError(err, __LINE__);
 }
@@ -1069,7 +1069,7 @@ void reverseIndices(float3idx *values, int numElements, uint32_t *revIndices) {
     calculateReverseIndices<<<blocksPerGrid, threadsPerBlock>>>(values, numElements, revIndices);
 }
 
-int nearestNeighborsEllipsoid(int numData, int numQueries, uint32_t k, float3 *values, float3 *querynormals, uint64_t *nearest, const uint32_t lambda) {
+int nearestNeighborsEllipsoid(int numData, int numQueries, uint32_t k, float3 *values, float3 *querynormals, uint64_t *nearest, const uint32_t lambda, const float compressionRate) {
     const int buckets = 18;
     /*
     Create icosahedron (even distribution) and 
@@ -1153,11 +1153,11 @@ int nearestNeighborsEllipsoid(int numData, int numQueries, uint32_t k, float3 *v
     struct timeval tval_before, tval_after, tval_result;
     gettimeofday(&tval_before, NULL);
     CoordinateSystem unit = unitSystem();
-    float normalScale = 1.0;
-    float tangentScale = 1.0;
 
-    float3 normalScaling = {normalScale, normalScale, normalScale};
-    float3 tangentScaling = {tangentScale, tangentScale, tangentScale};
+    float bucketScale = fmin(1.0, 2.0/compressionRate);
+    float3 bucketNormalScaling = {bucketScale, bucketScale, bucketScale};
+    float3 normalScaling = {1.0/compressionRate, 1.0/compressionRate, 1.0/compressionRate};
+    float3 tangentScaling = {1.0, 1.0, 1.0};
 
     for (int bucket = 0; bucket < buckets; bucket++) {
         storeOriginalIndices(numElements, devValues, devIndexed);
@@ -1179,7 +1179,7 @@ int nearestNeighborsEllipsoid(int numData, int numQueries, uint32_t k, float3 *v
         float3 tangent1 = cross(bucketnormal, tangent0);
         CoordinateSystem bucketSpace = {
             mult(tangent0, tangentScaling),
-            mult(bucketnormal, normalScaling),
+            mult(bucketnormal, bucketNormalScaling),
             mult(tangent1, tangentScaling)
         };
 
@@ -1271,21 +1271,19 @@ int nearestNeighborsEllipsoid(int numData, int numQueries, uint32_t k, float3 *v
     err = cudaMemcpy(nearest, devNearest, nearestSize, cudaMemcpyDeviceToHost);
     handleError(err, __LINE__);
     
-    for(int i = 0; i < numQueries; i++){
-        float3 query = values[i+numData];
-        float3 n = querynormals[i];
-        //fprintf(stderr,"(%f,%f,%f)<(%f,%f,%f): ", query.x, query.y, query.z, n.x, n.y, n.z);
-        fprintf(stderr, "%u ", i);
-        for(int j = 0; j< k; j++){
-            uint32_t valueIndex = (uint32_t) nearest[i*k+j];
-            if(valueIndex > numData) {
-                fprintf(stderr, "%u ", (uint32_t) nearest[k*i+j]);
-            }
-            //float3 value = values[valueIndex];
-            //fprintf(stderr,"%u(%u) (%f,%f,%f) - ", (uint32_t) nearest[i*k+j], (uint32_t) (nearest[i*k+j] >> 32), value.x, value.y, value.z);
-        }   
-        fprintf(stderr,"\n");
-    }
+   // for(int i = 0; i < numQueries; i++){
+   //     float3 query = values[i+numData];
+   //     fprintf(stderr, "%u ", i);
+   //     for(int j = 0; j< k; j++){
+   //         uint32_t valueIndex = (uint32_t) nearest[i*k+j];
+   //         //if(valueIndex > numData) {
+   //             fprintf(stderr, "%u ", (uint32_t) nearest[k*i+j]);
+   //         //}
+   //         //float3 value = values[valueIndex];
+   //         //fprintf(stderr,"%u(%u) (%f,%f,%f) - ", (uint32_t) nearest[i*k+j], (uint32_t) (nearest[i*k+j] >> 32), value.x, value.y, value.z);
+   //     }   
+   //     fprintf(stderr,"\n");
+   // }
 
     fprintf(stderr, "Time elapsed: %ld.%06ld\n", (long int)tval_result.tv_sec, (long int)tval_result.tv_usec);
 

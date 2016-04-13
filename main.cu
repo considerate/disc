@@ -43,9 +43,9 @@ void initValues(float3 *values, float3 *querynormals, int numElements, int numQu
 }
 
 int main(int argc, char **argv) {
-    int querySize = 1 << 13;
-    int dataSize = 1 << 14;
-    int kSize = 80;
+    int querySize = 1 << 17;
+    int dataSize = 1 << 6;
+    int kSize = 5;
     int size = dataSize + querySize;
     srand(time(0));
     size_t valueSize = size * sizeof(float3);
@@ -63,7 +63,7 @@ int main(int argc, char **argv) {
     uint64_t *nearest = (uint64_t *) malloc(nearestSize);
     initValues(values, querynormals, size, querySize);
     const uint32_t lambda = 4;
-    return nearestNeighborsEllipsoid(dataSize, querySize, kSize, values, querynormals, nearest, lambda);
+    return nearestNeighborsEllipsoid(dataSize, querySize, kSize, values, querynormals, nearest, lambda, 4.0);
     //return nearestNeighbors(dataSize, querySize, kSize, values,nearest);
 }
 
